@@ -87,9 +87,34 @@ def _discover_modules_bundled() -> List["Module"]:
     return modules
 
 
+def _is_inside_macos_bundle() -> bool:
+    """Check if running inside a macOS .app bundle."""
+    # PyInstaller sets sys._MEIPASS; the executable lives in Contents/MacOS/
+    exe = os.path.realpath(sys.executable)
+    return platform.system() == "Darwin" and "/Contents/MacOS/" in exe
+
+
+def _get_macos_extra_paths() -> List[str]:
+    """Return common executable directories that may be missing when
+    launched from Finder (which uses a minimal PATH)."""
+    return [
+        "/usr/local/bin",           # Homebrew (Intel Mac)
+        "/opt/homebrew/bin",        # Homebrew (Apple Silicon)
+        os.path.expanduser("~/.local/bin"),  # pip --user installs
+    ]
+
+
 def _discover_modules_system() -> List["Module"]:
     """Find all aw- modules in PATH"""
     search_paths = os.get_exec_path()
+
+    # When launched from Finder the PATH is minimal (/usr/bin:/bin:/usr/sbin:/sbin).
+    # Add common directories so that system-installed modules are still found.
+    if _is_inside_macos_bundle():
+        for p in _get_macos_extra_paths():
+            if p not in search_paths:
+                search_paths.append(p)
+        logger.debug(f"macOS .app bundle detected, augmented search paths: {search_paths}")
 
     # Needed because PyInstaller adds the executable dir to the PATH
     if _parent_dir in search_paths:
