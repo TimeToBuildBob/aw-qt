@@ -42,10 +42,27 @@ class TestServerPort:
         (server_dir / "aw-server.toml").write_text("[server]\nport = 5668\n")
         assert _read_server_port("research") == 5668
 
-    def test_pre_isolation_suffixed_rust_file_is_still_found(self, xdg_tmp):
-        rust_dir = _module_config_dir("research", "aw-server-rust")
-        (rust_dir / "config-research.toml").write_text("port = 5667\n")
+    def test_pre_isolation_shared_root_rust_file_is_still_found(self, xdg_tmp):
+        """Named profiles stored config-<profile>.toml under activitywatch/."""
+        shared = _module_config_dir(DEFAULT_PROFILE, "aw-server-rust")
+        (shared / "config-research.toml").write_text("port = 5667\n")
+        isolated = _module_config_dir("research", "aw-server-rust")
+        assert not (isolated / "config.toml").exists()
         assert _read_server_port("research") == 5667
+        assert _read_server_port("default") == 5600
+
+    def test_isolated_bare_config_wins_over_shared_root_suffix(self, xdg_tmp):
+        isolated = _module_config_dir("research", "aw-server-rust")
+        (isolated / "config.toml").write_text("port = 5667\n")
+        shared = _module_config_dir(DEFAULT_PROFILE, "aw-server-rust")
+        (shared / "config-research.toml").write_text("port = 5999\n")
+        assert _read_server_port("research") == 5667
+
+    def test_pre_isolation_shared_root_python_section(self, xdg_tmp):
+        shared = _module_config_dir(DEFAULT_PROFILE, "aw-server")
+        (shared / "aw-server.toml").write_text("[server-research]\nport = 5668\n")
+        assert _read_server_port("research") == 5668
+        assert _read_server_port("default") == 5600
 
     def test_isolated_testing_uses_bare_config_toml(self, xdg_tmp):
         rust_dir = _module_config_dir("testing", "aw-server-rust")
@@ -92,3 +109,23 @@ class TestAwQtSettings:
     def test_profile_without_section_inherits_default(self, xdg_tmp):
         settings = AwQtSettings(profile="research")
         assert settings.autostart_modules == AwQtSettings().autostart_modules
+
+    def test_pre_isolation_shared_root_awqt_section(self, xdg_tmp):
+        shared = _module_config_dir(DEFAULT_PROFILE, "aw-qt")
+        (shared / "aw-qt.toml").write_text(
+            '[aw-qt-research]\nautostart_modules = ["aw-server-rust"]\n'
+        )
+        settings = AwQtSettings(profile="research")
+        assert settings.autostart_modules == ["aw-server-rust"]
+
+    def test_isolated_awqt_section_wins_over_shared_root(self, xdg_tmp):
+        isolated = _module_config_dir("research", "aw-qt")
+        (isolated / "aw-qt.toml").write_text(
+            '[aw-qt]\nautostart_modules = ["aw-server"]\n'
+        )
+        shared = _module_config_dir(DEFAULT_PROFILE, "aw-qt")
+        (shared / "aw-qt.toml").write_text(
+            '[aw-qt-research]\nautostart_modules = ["aw-server-rust"]\n'
+        )
+        settings = AwQtSettings(profile="research")
+        assert settings.autostart_modules == ["aw-server"]

@@ -9,7 +9,9 @@ aw-qt only launches things, so its job is small: resolve the profile, export
 it as ``AW_PROFILE`` for the modules it spawns (which isolates dirs via
 aw-core), and use the profile suffix for the lockfile. Port lookup and
 config sections follow isolated-root rules: bare ``config.toml`` / ``[server]``
-in the profile dir, with suffixed names only for legacy shared-root testing.
+in the profile dir, suffixed names for legacy shared-root testing, and a
+shared-root ``config-<profile>.toml`` / ``[server-<profile>]`` fallback so
+pre-isolation named-profile files are not orphaned.
 """
 
 import os
