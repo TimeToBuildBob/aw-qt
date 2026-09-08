@@ -586,9 +586,11 @@ def ensure_enabled_on_first_run() -> None:
 
     Used by builds where autostart should be on by default (e.g. the Research
     Edition, where participants' machines must survive reboots without setup
-    steps). A marker file in the aw-qt data dir records that enabling
-    succeeded, so a user who later unchecks "Start at login" is never
-    overridden. On failure no marker is written, and the next launch retries.
+    steps). A per-profile marker file in the aw-qt data dir records that
+    enabling succeeded for this profile, so a user who later unchecks "Start
+    at login" is never overridden, and a later profile still gets its own
+    first-run registration. On failure no marker is written, and the next
+    launch retries.
     """
     if not is_supported():
         logger.debug(
