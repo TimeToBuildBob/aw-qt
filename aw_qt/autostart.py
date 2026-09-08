@@ -576,6 +576,11 @@ def disable() -> None:
 FIRST_RUN_MARKER = "autostart-first-run"
 
 
+def _first_run_marker_name() -> str:
+    """Marker filename for the active profile's autostart registration."""
+    return f"{FIRST_RUN_MARKER}{_profile_suffix()}"
+
+
 def ensure_enabled_on_first_run() -> None:
     """Enable start-at-login once, on the first launch that sees the setting.
 
@@ -592,7 +597,7 @@ def ensure_enabled_on_first_run() -> None:
         return
     from aw_core import dirs  # deferred: keep this module importable without aw_core
 
-    marker = Path(dirs.get_data_dir("aw-qt")) / FIRST_RUN_MARKER
+    marker = Path(dirs.get_data_dir("aw-qt")) / _first_run_marker_name()
     if marker.exists():
         return
     try:

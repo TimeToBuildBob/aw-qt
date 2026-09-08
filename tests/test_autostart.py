@@ -471,6 +471,19 @@ class TestFirstRunEnable:
             autostart.ensure_enabled_on_first_run()
         mock_enable.assert_not_called()
 
+    def test_named_profiles_have_independent_markers(
+        self, data_dir, monkeypatch
+    ):
+        (data_dir / autostart.FIRST_RUN_MARKER).write_text("done\n")
+        monkeypatch.setenv("AW_PROFILE", "research")
+        with (
+            patch.object(autostart, "is_supported", return_value=True),
+            patch.object(autostart, "enable") as mock_enable,
+        ):
+            autostart.ensure_enabled_on_first_run()
+        mock_enable.assert_called_once()
+        assert (data_dir / f"{autostart.FIRST_RUN_MARKER}-research").exists()
+
     def test_failure_writes_no_marker_and_does_not_raise(self, data_dir):
         with (
             patch.object(autostart, "is_supported", return_value=True),
