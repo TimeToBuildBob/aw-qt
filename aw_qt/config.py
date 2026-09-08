@@ -1,12 +1,13 @@
 import logging
 import os
-from typing import Any, List, Optional
+from contextlib import contextmanager
+from typing import Any, Iterator, List, Optional
 
 import tomlkit
 from aw_core import dirs
 from aw_core.config import load_config_toml
 
-from .profile import DEFAULT_PROFILE, TESTING_PROFILE, is_testing
+from .profile import DEFAULT_PROFILE, ENV_VAR, TESTING_PROFILE, is_testing
 
 logger = logging.getLogger(__name__)
 
@@ -23,46 +24,111 @@ autostart_on_first_run = false
 """.strip()
 
 
-def _read_server_rust_port(profile: str) -> Optional[int]:
-    """Read port from aw-server-rust config, returns None if not found/set."""
-    config_dir = dirs.get_config_dir("aw-server-rust")
-    # Mirrors aw-server-rust's own config path: bare for the default profile,
-    # `config-<profile>.toml` otherwise.
-    config_file = (
-        "config.toml" if profile == DEFAULT_PROFILE else f"config-{profile}.toml"
-    )
-    config_path = os.path.join(config_dir, config_file)
+@contextmanager
+def _with_profile_env(profile: str) -> Iterator[None]:
+    """Resolve dirs for ``profile`` even if the caller has not exported it.
 
-    if not os.path.isfile(config_path):
-        return None
-
+    aw-core keys isolation off ``AW_PROFILE``. Lookup functions take a
+    profile argument, so they must set the env for the duration of the
+    path computation — otherwise a test or a probe for a sibling profile
+    would read the process's current root.
+    """
+    old = os.environ.get(ENV_VAR)
+    if profile == DEFAULT_PROFILE:
+        os.environ.pop(ENV_VAR, None)
+    else:
+        os.environ[ENV_VAR] = profile
     try:
-        with open(config_path) as f:
+        yield
+    finally:
+        if old is None:
+            os.environ.pop(ENV_VAR, None)
+        else:
+            os.environ[ENV_VAR] = old
+
+
+def _using_legacy_testing_root() -> bool:
+    """True when testing data still lives on the shared ``activitywatch/`` root.
+
+    Isolated roots (including new-style ``activitywatch-testing/``) use bare
+    filenames; ``config-testing.toml`` / ``[server-testing]`` stay legacy-only.
+    """
+    try:
+        from aw_core.dirs import using_legacy_testing_root
+
+        return using_legacy_testing_root()
+    except ImportError:
+        # aw-core < 0.5.18: no testing-root helper. Testing still shares the
+        # default root and uses suffixed names.
+        return os.environ.get(ENV_VAR) == TESTING_PROFILE
+
+
+def _read_toml_port(path: str) -> Optional[int]:
+    if not os.path.isfile(path):
+        return None
+    try:
+        with open(path) as f:
             config = tomlkit.parse(f.read())
         if "port" in config:
             return int(str(config["port"]))
     except Exception as e:
-        logger.warning("Failed to read aw-server-rust config: %s", e)
+        logger.warning("Failed to read %s: %s", path, e)
+    return None
+
+
+def _read_server_rust_port(profile: str) -> Optional[int]:
+    """Read port from aw-server-rust config, returns None if not found/set.
+
+    Isolated profile roots (and a fresh ``activitywatch-testing/``) use bare
+    ``config.toml`` — matching aw-server-rust#652. ``config-testing.toml`` is
+    only read in the legacy shared-root testing layout. A pre-isolation
+    ``config-<profile>.toml`` is a fallback for named profiles so an old
+    shared-root file is not silently ignored.
+    """
+    with _with_profile_env(profile):
+        config_dir = dirs.get_config_dir("aw-server-rust")
+        if _using_legacy_testing_root():
+            filenames = [f"config-{TESTING_PROFILE}.toml"]
+        else:
+            filenames = ["config.toml"]
+            if profile != DEFAULT_PROFILE:
+                filenames.append(f"config-{profile}.toml")
+        for name in filenames:
+            port = _read_toml_port(os.path.join(config_dir, name))
+            if port is not None:
+                return port
     return None
 
 
 def _read_aw_server_port(profile: str) -> Optional[int]:
-    """Read port from aw-server (Python) config, returns None if not found/set."""
-    config_dir = dirs.get_config_dir("aw-server")
-    config_path = os.path.join(config_dir, "aw-server.toml")
-    section = "server" if profile == DEFAULT_PROFILE else f"server-{profile}"
+    """Read port from aw-server (Python) config, returns None if not found/set.
 
-    if not os.path.isfile(config_path):
-        return None
-
-    try:
-        with open(config_path) as f:
-            config = tomlkit.parse(f.read())
-        section_data = config.get(section, {})
-        if "port" in section_data:
-            return int(str(section_data["port"]))
-    except Exception as e:
-        logger.warning("Failed to read aw-server config: %s", e)
+    Isolated roots use the ``[server]`` section (the directory already
+    isolates). ``[server-testing]`` is legacy-only, matching the same
+    3-rule as aw-core#152 / aw-server-rust#652. ``[server-<profile>]``
+    remains a fallback for pre-isolation named-profile files.
+    """
+    with _with_profile_env(profile):
+        config_dir = dirs.get_config_dir("aw-server")
+        config_path = os.path.join(config_dir, "aw-server.toml")
+        if not os.path.isfile(config_path):
+            return None
+        try:
+            with open(config_path) as f:
+                config = tomlkit.parse(f.read())
+        except Exception as e:
+            logger.warning("Failed to read aw-server config: %s", e)
+            return None
+        if _using_legacy_testing_root():
+            sections = [f"server-{TESTING_PROFILE}"]
+        else:
+            sections = ["server"]
+            if profile != DEFAULT_PROFILE:
+                sections.append(f"server-{profile}")
+        for section in sections:
+            section_data = config.get(section, {})
+            if "port" in section_data:
+                return int(str(section_data["port"]))
     return None
 
 
@@ -113,12 +179,16 @@ class AwQtSettings:
         An instance of loaded settings, containing a list of modules to autostart.
         Constructor takes the profile name as an argument.
         """
-        config = load_config_toml("aw-qt", default_config)
-        section_name = "aw-qt" if profile == DEFAULT_PROFILE else f"aw-qt-{profile}"
-        if section_name not in config:
-            # A profile without its own section inherits the default one.
-            section_name = "aw-qt"
-        config_section: Any = config[section_name]
+        with _with_profile_env(profile):
+            config = load_config_toml("aw-qt", default_config)
+            # Isolated roots use [aw-qt]; [aw-qt-testing] is legacy-only.
+            if _using_legacy_testing_root():
+                section_name = f"aw-qt-{TESTING_PROFILE}"
+            else:
+                section_name = "aw-qt"
+            if section_name not in config:
+                section_name = "aw-qt"
+            config_section: Any = config[section_name]
 
         self.autostart_modules: List[str] = config_section["autostart_modules"]
         self.autostart_on_first_run: bool = bool(
