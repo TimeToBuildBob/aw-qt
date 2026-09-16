@@ -272,6 +272,15 @@ class TrayIcon(QSystemTrayIcon):
         QtCore.QTimer.singleShot(5000, check_module_status)
 
         def check_db_locked() -> None:
+            try:
+                _check_db_locked_once()
+            finally:
+                # Always reschedule, even if a poll raised (e.g. decoding an
+                # unexpectedly-encoded log line), so one bad poll cannot kill
+                # the detection loop permanently.
+                QtCore.QTimer.singleShot(30000, check_db_locked)
+
+        def _check_db_locked_once() -> None:
             locked = self.manager.get_db_locked_modules()
             locked_names = {m.name for m in locked}
 
@@ -297,8 +306,6 @@ class TrayIcon(QSystemTrayIcon):
             # notified set while the long window still reports the module as locked,
             # which would cause a new notification to fire every 30-second poll.
             self._db_locked_notified &= locked_names
-
-            QtCore.QTimer.singleShot(30000, check_db_locked)
 
         QtCore.QTimer.singleShot(30000, check_db_locked)
 
